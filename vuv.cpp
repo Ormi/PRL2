@@ -32,19 +32,39 @@ void display_vector(const vector<int> &v)
     copy(v.begin(), v.end(),
         ostream_iterator<int>(cout, " "));
 }
+
+/**
+	Function for just displaying content of array
+	@param array of int numbers
+	@param size of array 
+	@return display content to stdout
+*/
 void display_array(int arr[], int size)
 {
+	int i = 0;
 	cout << "0:" << arr[0] << "\n";
-	for (int i=1; i < size; i++) {
+	for (i=1; i < size; i++) {
 	 	cout << i << ":" << arr[i] << "\n";
 	}
 	cout << endl;
 }
-int getElementIndex(int array[], int size, int value)
-{ 
-	int index = 0;
-	while ( index < size && array[index] != value ) ++index;
-	return ( index == size ? -1 : index );
+
+/**
+	Function for just getting index of desired element in array
+	@param array of int numbers
+	@param size of array 
+	@param val of which index we are looking for
+	@return desired index or -1 if not found
+*/
+int get_index_of_element(int arr[], int size, int val)
+{
+	int index = 0; 
+	for (index = 0; index < size; index++) {
+		if ( arr[index] == val ) {
+			return index;
+		}
+	}
+	return -1;
 }
 
 /**
@@ -62,10 +82,8 @@ Algorithm: - level of vertex
 	level(root) = 0
 */
 int main(int argc, char *argv[]) {
-	const int EOS=-1;
 	int processesCount = 0;
 	int processId = 0;
-	string input;
 	// Initialize the MPI
     MPI_Init(&argc, &argv);
     MPI_Status stat;
@@ -73,7 +91,11 @@ int main(int argc, char *argv[]) {
     MPI_Comm_size(MPI_COMM_WORLD,&processesCount); //get number of processes
     MPI_Comm_rank(MPI_COMM_WORLD,&processId); //get actual process id
 
+    // get input string from script
+	string input;
 	input = argv[argc-1];
+
+	// prepare variables for tree structure calculating
 	int mySuccessor, myPredecessor = 0;
 	int isPredParent, isSuccParent = 0;
 	int isLeftChildPred, isLeftChildSucc = 0;
@@ -83,6 +105,8 @@ int main(int argc, char *argv[]) {
 	int suffixSum = 0;
 	vector<int> adjacencyList;
 
+	// If there is only one item in tree
+	// Just print it out
 	if(processesCount == 1) {
 		cout << input << ":0\n";
 		MPI_Finalize(); 
@@ -90,7 +114,7 @@ int main(int argc, char *argv[]) {
 	}
 
     /************************ Adjency List Creation **************************/
-	// calculate my neighbours and my inverse edge
+	// calculate my neighbours and my inverse edges
 	if (processId % 2 == 0) {
 		mySuccessor = processId/4;
 		myPredecessor = processId/2+1;
@@ -102,7 +126,7 @@ int main(int argc, char *argv[]) {
 		inverseEdge = processId - 1;
 		weight = 1;
 	}
-	// calculate my list ajdency list to lnow, where i am
+	// calculate my ajdency list to know, where am I
 	if (myPredecessor != 0) {
 		adjacencyList.push_back(((myPredecessor-1)*2)+1);
 		adjacencyList.push_back((myPredecessor-1)*2);
@@ -121,10 +145,14 @@ int main(int argc, char *argv[]) {
 	}	
 
 	// get next Etour edge for this edge
-	int nextEdgeEtour = 0;
-	for (int i = 0; i < adjacencyList.size(); i = i + 2) {
+	// each node has 2 edges, iterate i+2
+	// if first item of list of vertex
+	// else next existuje
+	int nextEdgeEtour, i = 0;
+	int adjacencyListSize = adjacencyList.size();
+	for (i = 0; i < adjacencyListSize; i = i+2) {
 		if (adjacencyList[i] == inverseEdge ) {
-			if ( i >= (adjacencyList.size()-2)) {
+			if ( i >= (adjacencyListSize - 2)) {
 				nextEdgeEtour = adjacencyList[0];
 			} else {
 				nextEdgeEtour = adjacencyList[i+2];
@@ -138,51 +166,61 @@ int main(int argc, char *argv[]) {
 	}
 
     /**************************** Euler's Path *******************************/
-	// create Euler's Path
+	// Processor are building the eTour array together ( MPI_Allgather )
+	// And wait until are processes get there ( MPI_Barrier )
 	int eTour[processesCount];
 	eTour[processId] = nextEdgeEtour;
 
 	MPI_Allgather(&eTour[processId], 1, MPI_INT, eTour, 1, MPI_INT, MPI_COMM_WORLD);
-	// wait for all processors to get here
 	MPI_Barrier(MPI_COMM_WORLD);
+
 	if (DEBUG && processId == 0) {
 		display_array(eTour, (sizeof(eTour)/sizeof(*eTour)));
 	}
 
-	/************************ Suffix Sum ************************ SEQUENTIAL */
-	int lastEdgeIndex = getElementIndex(eTour, processesCount, getElementIndex(eTour, processesCount, 0));
-	int suffixFromSender;
-	if(getElementIndex(eTour, processesCount, processId) == eTour[lastEdgeIndex]){ // root element
+	/****************************** Suffix Sum ********************************/
+	int highestEdgeIndex = get_index_of_element(eTour, processesCount, get_index_of_element(eTour, processesCount, 0));
+	int suffixFromSender = 0;
+	int elementIndex = get_index_of_element(eTour, processesCount, processId);
+
+	// if root element count for root
+	// else if last element of etour
+	// else other elements
+	if(elementIndex == eTour[highestEdgeIndex]) {
 		MPI_Recv(&suffixFromSender, 1, MPI_INT, eTour[processId], 0, MPI_COMM_WORLD, &stat);
 		suffixSum = suffixFromSender + weight;
-	} else if(processId == eTour[lastEdgeIndex]){ // last element of eTour
+	} else if(processId == eTour[highestEdgeIndex]) {
 		suffixSum = weight;
-		MPI_Send(&suffixSum, 1, MPI_INT, getElementIndex(eTour, processesCount, processId), 0, MPI_COMM_WORLD);
+		MPI_Send(&suffixSum, 1, MPI_INT, elementIndex, 0, MPI_COMM_WORLD);
 	} else {
 		MPI_Recv(&suffixFromSender, 1, MPI_INT, eTour[processId], 0, MPI_COMM_WORLD, &stat);
 		suffixSum = suffixFromSender + weight;
-		MPI_Send(&suffixSum, 1, MPI_INT, getElementIndex(eTour, processesCount, processId), 0, MPI_COMM_WORLD);
+		MPI_Send(&suffixSum, 1, MPI_INT, elementIndex, 0, MPI_COMM_WORLD);
 	}
+
 	suffixSum = suffixSum * weight;
+
 	if (DEBUG) {
 		cout << "My ID: " << processId << " Suffix Sum: " << suffixSum << "\n";
 	}
-	MPI_Barrier(MPI_COMM_WORLD); // wait for all processors to get here
+
+	MPI_Barrier(MPI_COMM_WORLD);
 
 	/****************** Gather Suffixes and print the tree *******************/
 	if (processId == 0) {
-		int tmpSuffix = 0;
-		int results[processesCount];
+		int finalSuffix = 0;
+		int finalWeights[processesCount];
 		int i = 0;
-		results[0] = suffixSum;
+		finalWeights[0] = suffixSum;
 		for (i = 1; i < processesCount; i++) {
-			MPI_Recv(&tmpSuffix, 1, MPI_INT, i, TAG, MPI_COMM_WORLD, &stat);
-			results[i] = tmpSuffix;
+			MPI_Recv(&finalSuffix, 1, MPI_INT, i, TAG, MPI_COMM_WORLD, &stat);
+			finalWeights[i] = finalSuffix;
 		}
-		// print nodes by value (first the greatest ones)
+		// print first node of A:0
+		// gather other nodes by their back edges
 		int z = 0;
 		cout << input[0] << ":0";
-		for (i=1; i<input.length(); i++) {
+		for (i = 1; i<input.length(); i++) {
 			if (i == 1) {
 				z = i;
 			} else if ( i == 2 ) {
@@ -190,7 +228,7 @@ int main(int argc, char *argv[]) {
 			} else {
 				z = i*2-1;
 			}
-			cout << "," << input[i] << ":" << results[z];
+			cout << "," << input[i] << ":" << finalWeights[z];
 		}
 		cout << "\n";
 	} else {
